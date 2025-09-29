@@ -1,11 +1,12 @@
 from __future__ import annotations
+from app.config import settings
 
 import json
 import logging
-import os
+import numpy as np
+import re
 from typing import Any, Dict, List
 
-import numpy as np
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -18,22 +19,24 @@ from openai import (
 
 logger = logging.getLogger("lawagent.openai")
 
-_API_KEY = os.getenv("OPENAI_API_KEY")
-_CHAT_MODEL = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-_EMBED_MODEL = "text-embedding-3-large"
+# === Config ===
+_API_KEY = settings.openai_api_key
+_CHAT_MODEL = settings.openai_model or "gpt-4o-mini"
+_EMBED_MODEL = settings.openai_embeddings_model or "text-embedding-3-large"
 _CLIENT: AsyncOpenAI | None = AsyncOpenAI(api_key=_API_KEY) if _API_KEY else None
 
 logger.info("OpenAI chat model set to %s", _CHAT_MODEL)
 
 _SYSTEM_PROMPT = (
     "You are a legal research assistant compiling potential expert witnesses from noisy web results. "
-    "Produce STRICT JSON: "
+    "Always produce at least 10 unique candidate objects in STRICT JSON: "
     "[{name, title, organization, sector, years_experience, location, summary, skills[], emails[], links[], "
     "sources:[{url, snippet}], confidence:low|medium|high, match_strength: 0..100}] "
     "Deduplicate people. Do not include text outside JSON."
 )
 
 
+# === Helpers ===
 def _build_messages(web_hits: List[Dict[str, Any]], user_context: Dict[str, Any]) -> List[Dict[str, str]]:
     payload = {
         "user_context": user_context,
@@ -46,15 +49,55 @@ def _build_messages(web_hits: List[Dict[str, Any]], user_context: Dict[str, Any]
 
 
 def _parse_candidates(content: str) -> List[Dict[str, Any]] | None:
+    """Try to extract JSON candidate list from model output."""
+    if not content:
+        return None
+
     try:
         parsed = json.loads(content)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return parsed
     except json.JSONDecodeError:
-        return None
-    if isinstance(parsed, list):
-        return parsed
+        pass
+
+    match = re.search(r"\[.*\]", content, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, list) and len(parsed) > 0:
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning("Failed to parse candidate JSON. Raw content: %s", content[:500])
     return None
 
 
+def _fallback_candidates(web_hits: List[Dict[str, Any]], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build low-confidence candidates directly from Perplexity hits."""
+    candidates = []
+    for hit in web_hits[:15]:  # cap at 15 just in case
+        candidates.append(
+            {
+                "name": hit.get("title") or "Unknown",
+                "title": "",
+                "organization": "",
+                "sector": user_context.get("industry") or "",
+                "years_experience": 0,
+                "location": "",
+                "summary": hit.get("snippet") or "",
+                "skills": [],
+                "emails": [],
+                "links": [hit.get("url")] if hit.get("url") else [],
+                "sources": [{"url": hit.get("url", ""), "snippet": hit.get("snippet", "")}],
+                "confidence": "low",
+                "match_strength": 0,
+            }
+        )
+    return candidates
+
+
+# === Main API ===
 async def summarize_to_candidates(
     web_hits: List[Dict[str, Any]], user_context: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
@@ -71,32 +114,34 @@ async def summarize_to_candidates(
                 temperature=0.1,
                 timeout=40,
             )
-        except AuthenticationError as exc:  # pragma: no cover - network
+        except AuthenticationError as exc:
             logger.error("OpenAI authentication failed: %s", exc)
             raise ValueError("OpenAI authentication failed. Check OPENAI_API_KEY.") from exc
-        except RateLimitError as exc:  # pragma: no cover - network
+        except RateLimitError as exc:
             logger.warning("OpenAI rate limit reached: %s", exc)
             raise ValueError("OpenAI rate limit reached. Try again shortly.") from exc
-        except (APIConnectionError, APIStatusError, BadRequestError, OpenAIError) as exc:  # pragma: no cover - network
+        except (APIConnectionError, APIStatusError, BadRequestError, OpenAIError) as exc:
             logger.error("OpenAI error while summarizing candidates: %s", exc)
             raise ValueError("Unable to summarize candidates from OpenAI.") from exc
 
         content = response.choices[0].message.content if response.choices else ""
-        if not content:
-            continue
+        logger.debug("🔎 Raw GPT content (attempt %d): %s", attempt + 1, content[:500])
 
         parsed = _parse_candidates(content)
-        if parsed is not None:
+        if parsed:
+            logger.info("✅ Parsed %d candidates from OpenAI", len(parsed))
             return parsed
 
         messages.append(
             {
                 "role": "system",
-                "content": "The previous response was invalid JSON. Respond with JSON only.",
+                "content": "The previous response was invalid JSON or empty. Respond with at least 10 JSON objects only.",
             }
         )
 
-    raise ValueError("OpenAI did not return valid candidate JSON.")
+    # Fallback if GPT fails or gives []
+    logger.warning("⚠️ Falling back to raw web hits for candidates")
+    return _fallback_candidates(web_hits, user_context)
 
 
 async def embed_texts(texts: List[str]) -> np.ndarray:
@@ -108,13 +153,13 @@ async def embed_texts(texts: List[str]) -> np.ndarray:
 
     try:
         result = await _CLIENT.embeddings.create(model=_EMBED_MODEL, input=texts, timeout=40)
-    except AuthenticationError as exc:  # pragma: no cover - network
+    except AuthenticationError as exc:
         logger.error("OpenAI authentication failed for embeddings: %s", exc)
         raise ValueError("OpenAI authentication failed. Check OPENAI_API_KEY.") from exc
-    except RateLimitError as exc:  # pragma: no cover - network
+    except RateLimitError as exc:
         logger.warning("OpenAI embedding rate limit reached: %s", exc)
         raise ValueError("OpenAI rate limit reached while computing embeddings.") from exc
-    except (APIConnectionError, APIStatusError, BadRequestError, OpenAIError) as exc:  # pragma: no cover - network
+    except (APIConnectionError, APIStatusError, BadRequestError, OpenAIError) as exc:
         logger.error("OpenAI error while computing embeddings: %s", exc)
         raise ValueError("Unable to compute embeddings.") from exc
 

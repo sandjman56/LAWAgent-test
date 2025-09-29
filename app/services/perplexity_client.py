@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import httpx
+from app.config import settings
 
 logger = logging.getLogger("lawagent.perplexity")
 
@@ -13,75 +13,88 @@ class PerplexityAPIError(RuntimeError):
     """Raised when Perplexity API requests fail."""
 
 
-_BASE_URL = "https://api.perplexity.ai"
-_SEARCH_PATH = "/search"
-_API_KEY = os.getenv("PERPLEXITY_API_KEY")
-_MODEL = os.getenv("PERPLEXITY_MODEL") or "llama-3.1-sonar-large-128k-online"
+_URL = "https://api.perplexity.ai/chat/completions"
 _TIMEOUT = httpx.Timeout(20.0, connect=10.0, read=20.0, write=10.0)
-
-logger.info("Perplexity model set to %s", _MODEL)
 
 
 async def search_web(query: str, limit: int = 12) -> List[Dict[str, str]]:
-    if not _API_KEY:
-        raise PerplexityAPIError("PERPLEXITY_API_KEY is not configured.")
+    """
+    Query Perplexity API and return normalized web search results.
+    """
+    if not settings.perplexity_api_key:
+        raise PerplexityAPIError("PERPLEXITY_API_KEY is not configured in environment.")
 
     headers = {
-        "Authorization": f"Bearer {_API_KEY}",
+        "Authorization": f"Bearer {settings.perplexity_api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": _MODEL,
-        "query": query,
-        "top_k": max(3, min(limit, 25)),
-        "search_mode": "concise",
-        "return_images": False,
-        "return_related_questions": False,
-        "return_citations": True,
+        "model": settings.perplexity_model or "llama-3.1-sonar-large-128k-online",
+        "messages": [
+            {"role": "system", "content": "You are a legal research assistant. Return concise sources."},
+            {"role": "user", "content": query},
+        ],
+        "max_tokens": 600,
     }
 
+    logger.info("🔍 Sending request to Perplexity model=%s query='%s'", payload["model"], query)
+
     try:
-        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
-            response = await client.post(_SEARCH_PATH, headers=headers, json=payload)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(_URL, headers=headers, json=payload)
             response.raise_for_status()
-    except httpx.HTTPStatusError as exc:  # pragma: no cover - network
+    except httpx.HTTPStatusError as exc:  # API returned error status
         body = exc.response.text if exc.response is not None else ""
-        logger.error("Perplexity returned %s: %s", exc.response.status_code if exc.response else "?", body)
-        raise PerplexityAPIError("Perplexity search failed with an HTTP error.") from exc
-    except httpx.RequestError as exc:  # pragma: no cover - network
+        logger.error("Perplexity HTTP %s: %s", exc.response.status_code if exc.response else "?", body)
+        raise PerplexityAPIError(f"Perplexity search failed with status {exc.response.status_code}") from exc
+    except httpx.RequestError as exc:  # Network-level error
         logger.error("Error communicating with Perplexity: %s", exc)
-        raise PerplexityAPIError("Unable to reach Perplexity search service.") from exc
+        raise PerplexityAPIError("Unable to reach Perplexity API.") from exc
 
-    payload = response.json()
+    data: Dict[str, Any] = response.json()
+    logger.debug("📥 Perplexity raw response: %s", data)
+
     results: List[Dict[str, str]] = []
-    items = []
-    if isinstance(payload, dict):
-        for key in ("data", "results", "output"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                items = value
-                break
 
-    for item in items[:limit]:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or item.get("name") or "").strip()
-        url = str(
-            item.get("url")
-            or item.get("source")
-            or item.get("link")
-            or item.get("citation")
-            or ""
-        ).strip()
-        snippet = str(
-            item.get("snippet")
-            or item.get("text")
-            or item.get("summary")
-            or item.get("content")
-            or ""
-        ).strip()
-        if not url:
-            continue
-        results.append({"title": title, "url": url, "snippet": snippet})
+    # Choices usually contain the main completion
+    choices = data.get("choices", [])
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message", {})
+        if isinstance(message, dict):
+            # Sometimes Perplexity embeds sources/citations here
+            sources = message.get("citations") or message.get("sources") or []
+            if isinstance(sources, list):
+                for item in sources[:limit]:
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(
+                        item.get("url")
+                        or item.get("source")
+                        or item.get("link")
+                        or item.get("citation")
+                        or ""
+                    ).strip()
+                    if not url:
+                        continue
+                    title = str(item.get("title") or item.get("name") or url).strip()
+                    snippet = str(
+                        item.get("snippet")
+                        or item.get("summary")
+                        or item.get("text")
+                        or ""
+                    ).strip()
+                    results.append({"title": title, "url": url, "snippet": snippet})
+
+    # Fallback if no structured citations found
+    if not results:
+        content = (
+            choices[0].get("message", {}).get("content")
+            if choices and isinstance(choices[0], dict)
+            else None
+        )
+        if content:
+            results.append(
+                {"title": "AI Summary", "url": "", "snippet": str(content).strip()}
+            )
 
     return results

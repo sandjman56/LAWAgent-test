@@ -42,7 +42,7 @@
       </section>
 
       <section class="container grid responsive-gap witness-layout">
-        <div class="card input-card" role="region" aria-labelledby="wf-form-heading">
+        <div class="card input-card">
           <div class="card-header">
             <h2 id="wf-form-heading">Search criteria</h2>
             <p>Describe the matter and we will identify expert witness candidates with citations.</p>
@@ -50,23 +50,11 @@
           <form id="witnessFinderForm" class="card-body" novalidate>
             <div class="field-group">
               <label for="sectorInput">Sector <span aria-hidden="true">*</span></label>
-              <input
-                type="text"
-                id="sectorInput"
-                name="sector"
-                required
-                placeholder="e.g., Healthcare, Financial Services, Energy"
-              />
+              <input type="text" id="sectorInput" name="sector" required placeholder="e.g., Healthcare, Financial Services, Energy" />
             </div>
             <div class="field-group">
               <label for="descriptionInput">Description <span aria-hidden="true">*</span></label>
-              <textarea
-                id="descriptionInput"
-                name="description"
-                rows="6"
-                required
-                placeholder="Describe the legal matter or expertise needed"
-              ></textarea>
+              <textarea id="descriptionInput" name="description" rows="6" required placeholder="Describe the legal matter or expertise needed"></textarea>
             </div>
             <div class="field-group">
               <label for="nameInput">Name hint (optional)</label>
@@ -82,26 +70,24 @@
             <p class="form-error" role="alert" aria-live="polite" hidden></p>
           </form>
 
-          <div class="loading-state" id="wfLoading" hidden aria-live="polite">
+          <div class="loading-state" id="wfLoading" hidden>
             <div class="loading-background"></div>
             <div class="loading-content">
               <p class="loading-title">Scanning knowledge corridors…</p>
               <p class="loading-meta"><span id="wfProgress">0%</span> · ETA <span id="wfEta">06</span>s</p>
-              <div class="loading-bar">
-                <div class="loading-bar-progress" id="wfProgressBar"></div>
-              </div>
+              <div class="loading-bar"><div class="loading-bar-progress" id="wfProgressBar"></div></div>
             </div>
           </div>
         </div>
 
-        <div class="card results-card" role="region" aria-labelledby="wf-results-heading">
+        <div class="card results-card">
           <div class="card-header">
             <h2 id="wf-results-heading">Results</h2>
-            <p class="results-status" id="wfResultsStatus" aria-live="polite">Awaiting search.</p>
+            <p class="results-status" id="wfResultsStatus">Awaiting search.</p>
           </div>
           <div class="card-body">
             <article class="witness-summary" id="wfSummary" hidden></article>
-            <div id="wfResults" class="results-grid" aria-live="polite"></div>
+            <div id="wfResults" class="results-grid"></div>
             <div class="empty-state" id="wfEmpty" hidden>
               <p>No results found. Try refining your query.</p>
             </div>
@@ -121,170 +107,151 @@
     <script src="assets/js/ui.js" defer></script>
     <script>
       (function () {
-        const form = document.getElementById('witnessFinderForm');
-        const loading = document.getElementById('wfLoading');
-        const progressText = document.getElementById('wfProgress');
-        const etaText = document.getElementById('wfEta');
-        const progressBar = document.getElementById('wfProgressBar');
-        const statusEl = document.getElementById('wfResultsStatus');
-        const summaryEl = document.getElementById('wfSummary');
-        const resultsEl = document.getElementById('wfResults');
-        const emptyEl = document.getElementById('wfEmpty');
-        const errorEl = form.querySelector('.form-error');
-
+        const form = document.getElementById("witnessFinderForm");
+        const loading = document.getElementById("wfLoading");
+        const progressText = document.getElementById("wfProgress");
+        const etaText = document.getElementById("wfEta");
+        const progressBar = document.getElementById("wfProgressBar");
+        const statusEl = document.getElementById("wfResultsStatus");
+        const summaryEl = document.getElementById("wfSummary");
+        const resultsEl = document.getElementById("wfResults");
+        const emptyEl = document.getElementById("wfEmpty");
+        const errorEl = form.querySelector(".form-error");
         let loadingInterval = null;
 
-        function updateStatus(message) {
-          if (statusEl) {
-            statusEl.textContent = message;
-          }
-        }
+        const API_BASE =
+          window.location.hostname.includes("render.com") ||
+          window.location.hostname.includes("onrender.com")
+            ? "https://lawagentbackend.onrender.com"
+            : "";
+        const API_ENDPOINT = `${API_BASE}/api/witness_finder/search`;
 
+        function updateStatus(msg) { statusEl.textContent = msg; }
         function resetResults() {
-          summaryEl.textContent = '';
+          summaryEl.textContent = "";
           summaryEl.hidden = true;
-          resultsEl.innerHTML = '';
+          resultsEl.innerHTML = "";
           emptyEl.hidden = true;
         }
-
         function startLoading() {
           loading.hidden = false;
           let progress = 0;
-          progressText.textContent = '0%';
-          etaText.textContent = '06';
-          progressBar.style.width = '0%';
-
-          loadingInterval = window.setInterval(() => {
+          progressText.textContent = "0%";
+          etaText.textContent = "06";
+          progressBar.style.width = "0%";
+          loadingInterval = setInterval(() => {
             progress = Math.min(progress + Math.random() * 12, 95);
             progressText.textContent = `${Math.round(progress)}%`;
             progressBar.style.width = `${Math.round(progress)}%`;
-            const eta = Math.max(1, Math.ceil((100 - progress) / 15)).toString().padStart(2, '0');
-            etaText.textContent = eta;
+            etaText.textContent = String(Math.max(1, Math.ceil((100 - progress) / 15))).padStart(2, "0");
           }, 400);
         }
-
         function stopLoading() {
-          if (loadingInterval) {
-            window.clearInterval(loadingInterval);
-            loadingInterval = null;
-          }
-          progressText.textContent = '100%';
-          progressBar.style.width = '100%';
-          etaText.textContent = '00';
-          window.setTimeout(() => {
-            loading.hidden = true;
-            progressBar.style.width = '0%';
-          }, 300);
+          if (loadingInterval) clearInterval(loadingInterval);
+          progressText.textContent = "100%";
+          progressBar.style.width = "100%";
+          etaText.textContent = "00";
+          setTimeout(() => { loading.hidden = true; progressBar.style.width = "0%"; }, 300);
         }
-
         async function fetchWitnesses(payload) {
-          const response = await fetch('/api/ask-witness', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+          const response = await fetch(API_ENDPOINT, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
           });
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const detail = errorData.detail || 'Unable to fetch witness data.';
-            throw new Error(detail);
-          }
-
+          if (!response.ok) throw new Error((await response.json()).detail || "Unable to fetch witness data.");
           return response.json();
         }
-
         function renderSummary(summary) {
-          if (!summary) {
-            summaryEl.textContent = '';
-            summaryEl.hidden = true;
-            return;
-          }
-          summaryEl.textContent = summary;
-          summaryEl.hidden = false;
+          summaryEl.textContent = summary || "";
+          summaryEl.hidden = !summary;
         }
 
-        function renderResults(results) {
-          resultsEl.innerHTML = '';
-          if (!Array.isArray(results) || results.length === 0) {
-            emptyEl.hidden = false;
-            return;
+        function renderResults(candidates) {
+          resultsEl.innerHTML = "";
+          if (!Array.isArray(candidates) || !candidates.length) {
+            emptyEl.hidden = false; return;
           }
-
           emptyEl.hidden = true;
-          results.forEach((result) => {
-            const card = document.createElement('article');
-            card.className = 'witness-card';
+          candidates.forEach((cand) => {
+            const card = document.createElement("article");
+            card.className = "witness-card";
 
-            const header = document.createElement('div');
-            header.className = 'witness-card-header';
+            const header = document.createElement("div");
+            header.className = "witness-card-header";
 
-            const titleLink = document.createElement('a');
-            titleLink.className = 'nav-link';
-            titleLink.href = result.url || '#';
-            titleLink.target = '_blank';
-            titleLink.rel = 'noopener noreferrer';
-            titleLink.textContent = result.title || 'View source';
-            header.appendChild(titleLink);
+            const nameEl = document.createElement("h3");
+            nameEl.textContent = cand.name || "Unnamed Candidate";
+            header.appendChild(nameEl);
 
-            if (typeof result.similarity === 'number' && !Number.isNaN(result.similarity)) {
-              const score = document.createElement('span');
-              score.className = 'witness-score';
-              score.textContent = `${result.similarity.toFixed(2)}`;
-              header.appendChild(score);
+            if (cand.organization) {
+              const org = document.createElement("span");
+              org.className = "org";
+              org.textContent = cand.organization;
+              header.appendChild(org);
             }
 
-            const snippet = document.createElement('p');
-            snippet.className = 'witness-summary';
-            snippet.textContent = result.snippet || 'No summary provided for this source.';
+            if (cand.confidence) {
+              const conf = document.createElement("span");
+              conf.className = "confidence";
+              conf.textContent = `Confidence: ${cand.confidence}`;
+              header.appendChild(conf);
+            }
 
+            const snippet = document.createElement("p");
+            snippet.textContent = cand.summary || "No summary available.";
             card.appendChild(header);
             card.appendChild(snippet);
+
+            if (Array.isArray(cand.sources) && cand.sources.length > 0) {
+              const srcList = document.createElement("ul");
+              srcList.className = "source-list";
+              cand.sources.forEach((src) => {
+                const li = document.createElement("li");
+                const link = document.createElement("a");
+                link.href = src.url || "#";
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.textContent = src.url || "Source";
+                li.appendChild(link);
+
+                if (src.snippet) {
+                  const snip = document.createElement("p");
+                  snip.className = "source-snippet";
+                  snip.textContent = src.snippet;
+                  li.appendChild(snip);
+                }
+                srcList.appendChild(li);
+              });
+              card.appendChild(srcList);
+            }
             resultsEl.appendChild(card);
           });
         }
 
-        form.addEventListener('submit', async (event) => {
-          event.preventDefault();
-          errorEl.hidden = true;
-          errorEl.textContent = '';
-
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          errorEl.hidden = true; resetResults();
           const formData = new FormData(form);
-          const sector = (formData.get('sector') || '').toString().trim();
-          const description = (formData.get('description') || '').toString().trim();
-          const name = (formData.get('name') || '').toString().trim();
-
+          const sector = formData.get("sector")?.toString().trim();
+          const description = formData.get("description")?.toString().trim();
+          const name = formData.get("name")?.toString().trim();
           if (!sector || !description) {
-            errorEl.textContent = 'Sector and description are required.';
-            errorEl.hidden = false;
-            return;
+            errorEl.textContent = "Sector and description are required."; errorEl.hidden = false; return;
           }
-
-          resetResults();
-          updateStatus('Querying Perplexity for expert witnesses…');
-          startLoading();
-
+          updateStatus("Querying Perplexity for expert witnesses…"); startLoading();
           try {
-            const payload = { sector, description, name };
-            if (!name) {
-              delete payload.name;
-            }
+            const payload = { industry: sector, description, name: name || null };
+            if (!name) delete payload.name;
             const data = await fetchWitnesses(payload);
-            renderSummary(data.summary || '');
-            renderResults(data.results || []);
-            if (!data.summary && (!data.results || data.results.length === 0)) {
-              emptyEl.hidden = false;
-            }
-            updateStatus('Search complete.');
-          } catch (error) {
-            resetResults();
-            emptyEl.hidden = false;
-            updateStatus('No results found. Try refining your query.');
-            const message = error instanceof Error ? error.message : 'Unable to complete the request.';
-            errorEl.textContent = message;
+            renderSummary(data.summary || "");
+            renderResults(data.candidates || []);
+            if (!data.summary && (!data.candidates || !data.candidates.length)) emptyEl.hidden = false;
+            updateStatus("Search complete.");
+          } catch (err) {
+            resetResults(); emptyEl.hidden = false;
+            updateStatus("No results found. Try refining your query.");
+            errorEl.textContent = err.message || "Unable to complete the request.";
             errorEl.hidden = false;
-          } finally {
-            stopLoading();
-          }
+          } finally { stopLoading(); }
         });
       })();
     </script>
