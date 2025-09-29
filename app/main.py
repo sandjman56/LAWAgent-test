@@ -11,6 +11,14 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.routers import health, issue_spotter
 from app.routers.witness_finder import router as witness_finder_router
+import os
+
+@app.get("/env-check")
+def env_check():
+    return {
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY")[:5] + "...",
+        "PERPLEXITY_API_KEY": os.getenv("PERPLEXITY_API_KEY")[:5] + "..."
+    }
 
 # --- Logging Config ---
 logging.basicConfig(
